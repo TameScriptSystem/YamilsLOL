@@ -1,1 +1,730 @@
-https://raw.githubusercontent.com/TameScriptSystem/Inventoru/refs/heads/main/5656456346346346346345345435?token=GHSAT0AAAAAADRBQCTDBBXXRYNWG6OEQXQW2KDUYHQ
+--[[
+    TriggerBot + Spinbot + Speed + Auto HvH
+    Rally UI - Quickscope + Match Only
+]]
+
+RallyUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/TameScriptSystem/Rally/refs/heads/main/Rally%20UI"))()
+
+Plrs = game:GetService('Players')
+RS = game:GetService('RunService')
+UIS = game:GetService('UserInputService')
+
+LP = Plrs.LocalPlayer
+M = LP:GetMouse()
+Cam = workspace.CurrentCamera
+
+Cfg = {
+    On = false,
+    Rage = false,
+    
+    TorsoMin = 30,
+    TorsoMax = 50,
+    HeadMin = 35,
+    HeadMax = 60,
+    LimbMin = 50,
+    LimbMax = 80,
+    
+    Miss = 3,
+    Vary = 15,
+    
+    KO = true,
+    FF = true,
+    
+    Lock = false,
+    LockKey = Enum.KeyCode.E,
+    Smooth = 0.5,
+    Pred = 0.135,
+    
+    DistanceCheck = false,
+    MaxDistance = 200,
+    
+    Spin = false,
+    SpinSpeed = 2000,
+    CamDistance = 10,
+    CamHeight = 3,
+    CamSensitivity = 0.3,
+    
+    Speed = false,
+    SpeedValue = 16,
+    SpeedIncrement = 4,
+    SpeedMin = 4,
+    SpeedMax = 100,
+    IncreaseKey = Enum.KeyCode.H,
+    DecreaseKey = Enum.KeyCode.J,
+    AntiSlow = true,
+    
+    AutoHvH = false,
+    HvHSmooth = 0.3,
+    HvHPred = 0.12,
+    HvHFOV = 360,
+    HvHPriority = "Closest",
+    AutoShoot = true,
+    ShootDelay = 50,
+    ScopeTime = 0.5,
+    VisCheck = true,
+    WallBang = false,
+}
+
+CurTgt = nil
+CurPart = nil
+HoverT = 0
+Delay = 0
+ShouldMiss = false
+LockTgt = nil
+LockOn = false
+MyTeam = nil
+MyMatchFolder = nil
+IsScoped = false
+
+AngleX = 0
+AngleY = 20
+SpinAngle = 0
+
+HvHTarget = nil
+HvHPart = nil
+LastShot = 0
+ScopeStart = 0
+IsQuickScoping = false
+
+Keys = {
+    [Enum.KeyCode.E] = "E", [Enum.KeyCode.Q] = "Q", [Enum.KeyCode.R] = "R",
+    [Enum.KeyCode.F] = "F", [Enum.KeyCode.C] = "C", [Enum.KeyCode.X] = "X",
+    [Enum.KeyCode.Z] = "Z", [Enum.KeyCode.V] = "V", [Enum.KeyCode.T] = "T",
+    [Enum.KeyCode.G] = "G", [Enum.KeyCode.H] = "H", [Enum.KeyCode.J] = "J",
+    [Enum.KeyCode.LeftShift] = "LShift",
+}
+
+Torsos = {"torso", "uppertorso", "lowertorso", "humanoidrootpart"}
+Heads = {"head", "face"}
+TargetParts = {"Head", "Torso", "HumanoidRootPart", "UpperTorso", "LowerTorso", "Right Arm", "Left Arm", "Right Leg", "Left Leg"}
+
+-- ═══════════════════════════════════════════════════════════════════════════
+--                              FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════════════════
+
+function GetMyMatchInfo()
+    local chars = workspace:FindFirstChild("Characters")
+    if not chars then return nil, nil end
+    
+    for _, matchFolder in pairs(chars:GetChildren()) do
+        local a = matchFolder:FindFirstChild("A")
+        if a and a:FindFirstChild(LP.Name) then
+            return matchFolder, a
+        end
+        
+        local b = matchFolder:FindFirstChild("B")
+        if b and b:FindFirstChild(LP.Name) then
+            return matchFolder, b
+        end
+        
+        if matchFolder:FindFirstChild(LP.Name) then
+            return matchFolder, matchFolder
+        end
+    end
+    return nil, nil
+end
+
+function IsInMyMatch(model)
+    if not MyMatchFolder then return false end
+    
+    local parent = model.Parent
+    if not parent then return false end
+    
+    if parent.Parent == MyMatchFolder then return true end
+    if parent == MyMatchFolder then return true end
+    
+    return false
+end
+
+function IsTeammate(model)
+    if not MyTeam then return false end
+    return model.Parent == MyTeam
+end
+
+function IsValidEnemy(model)
+    if not model then return false end
+    if model.Name == LP.Name then return false end
+    if not IsInMyMatch(model) then return false end
+    if IsTeammate(model) then return false end
+    if Cfg.KO and IsDown(model) then return false end
+    if Cfg.FF and HasFF(model) then return false end
+    return true
+end
+
+function GetCharFromPart(part)
+    if not part then return nil, nil end
+    
+    local chars = workspace:FindFirstChild("Characters")
+    if not chars then return nil, nil end
+    
+    local cur = part
+    while cur and cur.Parent ~= chars do
+        if cur.Parent and cur.Parent.Parent == chars then break end
+        if cur.Parent and cur.Parent.Parent and cur.Parent.Parent.Parent == chars then break end
+        cur = cur.Parent
+        if not cur then return nil, nil end
+    end
+    
+    if not cur or cur == chars then return nil, nil end
+    if not IsValidEnemy(cur) then return nil, nil end
+    
+    return cur, part
+end
+
+function IsMelee(tool)
+    if not tool then return false end
+    local n = tool.Name:lower()
+    local bad = {"knife", "fist", "bat", "phone", "spray", "mask", "cookie", "burger", "chicken"}
+    for _, b in ipairs(bad) do
+        if n:find(b) then return true end
+    end
+    return false
+end
+
+function IsDown(model)
+    if not model then return false end
+    local h = model:FindFirstChildOfClass("Humanoid")
+    if h and h.Health <= 0 then return true end
+    local be = model:FindFirstChild("BodyEffects")
+    if be then
+        local ko = be:FindFirstChild("K.O") or be:FindFirstChild("KO")
+        if ko and ko.Value == true then return true end
+    end
+    return false
+end
+
+function HasFF(model)
+    if not model then return false end
+    return model:FindFirstChildOfClass("ForceField") ~= nil
+end
+
+function GetPartType(pn)
+    if not pn then return "limb" end
+    local n = pn:lower()
+    for _, t in ipairs(Torsos) do if n:find(t) then return "torso" end end
+    for _, h in ipairs(Heads) do if n:find(h) then return "head" end end
+    return "limb"
+end
+
+function GetDelay(pt)
+    local mn, mx = 0, 0
+    if pt == "torso" then mn, mx = Cfg.TorsoMin, Cfg.TorsoMax
+    elseif pt == "head" then mn, mx = Cfg.HeadMin, Cfg.HeadMax
+    else mn, mx = Cfg.LimbMin, Cfg.LimbMax end
+    return math.max(0, math.random(mn, mx) + math.random(-Cfg.Vary, Cfg.Vary))
+end
+
+function GetRoot(model)
+    if not model then return nil end
+    return model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso") or model:FindFirstChild("Head")
+end
+
+function GetTarget()
+    local pt = M.Target
+    if not pt then return nil, nil end
+    
+    local model, hitPart = GetCharFromPart(pt)
+    if not model then return nil, nil end
+    
+    if Cfg.DistanceCheck and LP.Character then
+        local mr = LP.Character:FindFirstChild("HumanoidRootPart")
+        local tr = GetRoot(model)
+        if mr and tr and (mr.Position - tr.Position).Magnitude > Cfg.MaxDistance then
+            return nil, nil
+        end
+    end
+    
+    return model, hitPart
+end
+
+function GetClosest()
+    if not MyMatchFolder then return nil end
+    if not LP.Character then return nil end
+    
+    local mr = LP.Character:FindFirstChild("HumanoidRootPart")
+    if not mr then return nil end
+    
+    local mousePos = M.Hit.Position
+    local closest, closestDist = nil, math.huge
+    
+    for _, child in pairs(MyMatchFolder:GetDescendants()) do
+        if child.Name == "Torso" or child.Name == "HumanoidRootPart" then
+            local model = child.Parent
+            if model and IsValidEnemy(model) then
+                local playerDist = (mr.Position - child.Position).Magnitude
+                if Cfg.DistanceCheck and playerDist > Cfg.MaxDistance then continue end
+                
+                local cursorDist = (mousePos - child.Position).Magnitude
+                if cursorDist < closestDist then
+                    closestDist = cursorDist
+                    closest = model
+                end
+            end
+        end
+    end
+    return closest
+end
+
+function Click()
+    if mouse1press and mouse1release then
+        mouse1press()
+        task.defer(function()
+            task.wait(0.001 + math.random() * 0.002)
+            mouse1release()
+        end)
+    elseif mouse1click then
+        mouse1click()
+    end
+end
+
+function RightClick(down)
+    if down then
+        if mouse2press then mouse2press() end
+    else
+        if mouse2release then mouse2release() end
+    end
+end
+
+function GetLockPos(model)
+    if not model then return nil end
+    local root = GetRoot(model)
+    if not root then return nil end
+    return root.Position + ((root.Velocity or Vector3.zero) * Cfg.Pred)
+end
+
+function UpdateSpeed(amount)
+    Cfg.SpeedValue = math.clamp(Cfg.SpeedValue + amount, Cfg.SpeedMin, Cfg.SpeedMax)
+    ApplySpeed()
+end
+
+function ApplySpeed()
+    if not Cfg.Speed or not LP.Character then return end
+    local hum = LP.Character:FindFirstChildOfClass("Humanoid")
+    if hum then hum.WalkSpeed = Cfg.SpeedValue end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+--                              HVH FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════════════════
+
+function IsPartVisible(part, fromPos)
+    if not part or not fromPos then return false end
+    
+    local direction = (part.Position - fromPos).Unit
+    local distance = (part.Position - fromPos).Magnitude
+    
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = {LP.Character}
+    
+    local result = workspace:Raycast(fromPos, direction * distance, rayParams)
+    
+    if not result then return true end
+    if result.Instance == part then return true end
+    if result.Instance:IsDescendantOf(part.Parent) then return true end
+    
+    return false
+end
+
+function GetVisiblePart(model, fromPos)
+    if not model then return nil end
+    
+    for _, partName in ipairs(TargetParts) do
+        local part = model:FindFirstChild(partName)
+        if part and part:IsA("BasePart") and IsPartVisible(part, fromPos) then
+            return part
+        end
+    end
+    return nil
+end
+
+function GetMatchEnemies()
+    if not MyMatchFolder then return {} end
+    
+    local enemies = {}
+    for _, child in pairs(MyMatchFolder:GetDescendants()) do
+        if child.Name == "Torso" or child.Name == "HumanoidRootPart" then
+            local model = child.Parent
+            if model and IsValidEnemy(model) then
+                table.insert(enemies, model)
+            end
+        end
+    end
+    return enemies
+end
+
+function GetHvHTarget()
+    if not LP.Character then return nil, nil end
+    local myRoot = LP.Character:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil, nil end
+    
+    local camPos = Cam.CFrame.Position
+    local enemies = GetMatchEnemies()
+    
+    local bestTarget, bestPart, bestScore = nil, nil, math.huge
+    
+    for _, enemy in ipairs(enemies) do
+        local enemyRoot = GetRoot(enemy)
+        if not enemyRoot then continue end
+        
+        local dist = (myRoot.Position - enemyRoot.Position).Magnitude
+        if Cfg.DistanceCheck and dist > Cfg.MaxDistance then continue end
+        
+        if Cfg.HvHFOV < 360 then
+            local screenPos, onScreen = Cam:WorldToScreenPoint(enemyRoot.Position)
+            if not onScreen then continue end
+            local screenCenter = Vector2.new(Cam.ViewportSize.X / 2, Cam.ViewportSize.Y / 2)
+            local fovDist = (screenCenter - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
+            if fovDist > Cfg.HvHFOV then continue end
+        end
+        
+        local visiblePart = nil
+        if Cfg.VisCheck then
+            visiblePart = GetVisiblePart(enemy, camPos)
+            if not visiblePart and not Cfg.WallBang then continue end
+        else
+            visiblePart = enemy:FindFirstChild("Head") or enemy:FindFirstChild("Torso") or enemyRoot
+        end
+        
+        if not visiblePart then visiblePart = enemyRoot end
+        
+        local score = dist
+        if Cfg.HvHPriority == "Visible" and Cfg.VisCheck then
+            local visCount = 0
+            for _, partName in ipairs(TargetParts) do
+                local part = enemy:FindFirstChild(partName)
+                if part and IsPartVisible(part, camPos) then visCount = visCount + 1 end
+            end
+            score = dist - (visCount * 50)
+        end
+        
+        if score < bestScore then
+            bestScore = score
+            bestTarget = enemy
+            bestPart = visiblePart
+        end
+    end
+    
+    return bestTarget, bestPart
+end
+
+function GetHvHAimPos(part, model)
+    if not part or not model then return nil end
+    local root = GetRoot(model)
+    local vel = root and root.Velocity or Vector3.zero
+    return part.Position + (vel * Cfg.HvHPred)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+--                              CONNECTIONS
+-- ═══════════════════════════════════════════════════════════════════════════
+
+task.spawn(function()
+    while true do
+        MyMatchFolder, MyTeam = GetMyMatchInfo()
+        task.wait(1)
+    end
+end)
+
+-- Manual scope tracking
+UIS.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        IsScoped = true
+    end
+end)
+
+UIS.InputEnded:Connect(function(input, gp)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        IsScoped = false
+    end
+end)
+
+-- Mouse movement for spinbot camera
+UIS.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        if Cfg.Spin then
+            AngleX = AngleX - input.Delta.X * Cfg.CamSensitivity
+            AngleY = math.clamp(AngleY + input.Delta.Y * Cfg.CamSensitivity, -60, 80)
+        end
+    end
+end)
+
+UIS.InputBegan:Connect(function(i, gp)
+    if gp then return end
+    
+    if i.KeyCode == Cfg.LockKey and Cfg.Lock and not Cfg.AutoHvH then
+        if LockOn then
+            LockOn = false
+            LockTgt = nil
+        else
+            LockTgt = GetClosest()
+            if LockTgt then LockOn = true end
+        end
+    end
+    
+    if Cfg.Speed then
+        if i.KeyCode == Cfg.IncreaseKey then UpdateSpeed(Cfg.SpeedIncrement)
+        elseif i.KeyCode == Cfg.DecreaseKey then UpdateSpeed(-Cfg.SpeedIncrement) end
+    end
+end)
+
+LP.CharacterAdded:Connect(function() task.wait(0.5) ApplySpeed() end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+--                    SEPARATE SPINBOT LOOP (ALWAYS RUNS)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+RS.Heartbeat:Connect(function(dt)
+    if not Cfg.Spin then return end
+    
+    local char = LP.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    -- Spin character
+    SpinAngle = SpinAngle + Cfg.SpinSpeed * dt
+    local spinCF = CFrame.Angles(0, math.rad(SpinAngle), 0)
+    
+    pcall(function()
+        hrp.CFrame = CFrame.new(hrp.Position) * spinCF
+    end)
+    
+    pcall(function()
+        hrp.AssemblyAngularVelocity = Vector3.new(0, math.rad(Cfg.SpinSpeed), 0)
+    end)
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+--                         MAIN LOOP (CAMERA + SHOOTING)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+RS.RenderStepped:Connect(function(dt)
+    local char = LP.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    
+    -- Speed
+    if Cfg.Speed and Cfg.AntiSlow and hum and hum.WalkSpeed < Cfg.SpeedValue then
+        hum.WalkSpeed = Cfg.SpeedValue
+    end
+    
+    -- ═══════════════════════════════════════════════════════════════════════
+    -- CAMERA + HVH SHOOTING
+    -- ═══════════════════════════════════════════════════════════════════════
+    local cameraHandled = false
+    
+    if Cfg.AutoHvH then
+        local tool = char:FindFirstChildWhichIsA("Tool")
+        local hasGun = tool and not IsMelee(tool)
+        
+        local target, visiblePart = GetHvHTarget()
+        
+        if target and visiblePart then
+            HvHTarget = target
+            HvHPart = visiblePart
+            
+            local aimPos = GetHvHAimPos(visiblePart, target)
+            if aimPos then
+                local cf = Cam.CFrame
+                local tgt = CFrame.lookAt(cf.Position, aimPos)
+                Cam.CFrame = cf:Lerp(tgt, 1 - Cfg.HvHSmooth)
+                cameraHandled = true
+                
+                -- Quickscope
+                if Cfg.AutoShoot and hasGun then
+                    if not Cfg.VisCheck or IsPartVisible(visiblePart, Cam.CFrame.Position) or Cfg.WallBang then
+                        local now = tick()
+                        
+                        if not IsQuickScoping then
+                            IsQuickScoping = true
+                            ScopeStart = now
+                            RightClick(true)
+                        end
+                        
+                        if IsQuickScoping and (now - ScopeStart) >= Cfg.ScopeTime then
+                            local nowMs = now * 1000
+                            if nowMs - LastShot >= Cfg.ShootDelay then
+                                Click()
+                                LastShot = nowMs
+                                
+                                task.delay(0.05, function()
+                                    RightClick(false)
+                                    IsQuickScoping = false
+                                end)
+                            end
+                        end
+                    end
+                end
+            end
+        else
+            HvHTarget = nil
+            HvHPart = nil
+            
+            if IsQuickScoping then
+                RightClick(false)
+                IsQuickScoping = false
+            end
+        end
+    else
+        if IsQuickScoping then
+            RightClick(false)
+            IsQuickScoping = false
+        end
+    end
+    
+    -- Camlock
+    if not cameraHandled and Cfg.Lock and LockOn and LockTgt then
+        local pos = GetLockPos(LockTgt)
+        if pos then
+            Cam.CFrame = Cam.CFrame:Lerp(CFrame.lookAt(Cam.CFrame.Position, pos), 1 - Cfg.Smooth)
+            cameraHandled = true
+        else
+            LockTgt = nil
+            LockOn = false
+        end
+    end
+    
+    -- Spinbot camera (only when nothing else controls camera)
+    if not cameraHandled and Cfg.Spin and hrp then
+        local radX, radY = math.rad(AngleX), math.rad(AngleY)
+        local offsetX = math.sin(radX) * math.cos(radY) * Cfg.CamDistance
+        local offsetY = math.sin(radY) * Cfg.CamDistance + Cfg.CamHeight
+        local offsetZ = math.cos(radX) * math.cos(radY) * Cfg.CamDistance
+        Cam.CFrame = CFrame.lookAt(hrp.Position + Vector3.new(offsetX, offsetY, offsetZ), hrp.Position + Vector3.new(0, 2, 0))
+    end
+    
+    -- ═══════════════════════════════════════════════════════════════════════
+    -- TRIGGERBOT
+    -- ═══════════════════════════════════════════════════════════════════════
+    if Cfg.AutoHvH or not Cfg.On then return end
+    if not IsScoped then return end
+    
+    local tool = char:FindFirstChildWhichIsA("Tool")
+    if not tool or IsMelee(tool) then return end
+    
+    local model, hitPart = GetTarget()
+    
+    if not model then
+        CurTgt, CurPart, HoverT, Delay, ShouldMiss = nil, nil, 0, 0, false
+        return
+    end
+    
+    if Cfg.Rage then Click() return end
+    
+    local pn = hitPart and hitPart.Name or "Unknown"
+    local pt = GetPartType(pn)
+    
+    if model ~= CurTgt or pt ~= CurPart then
+        CurTgt, CurPart = model, pt
+        HoverT = tick()
+        Delay = GetDelay(pt)
+        ShouldMiss = math.random(1, 100) <= Cfg.Miss
+        return
+    end
+    
+    if (tick() - HoverT) * 1000 >= Delay then
+        if ShouldMiss then
+            HoverT = tick()
+            Delay = GetDelay(pt)
+            ShouldMiss = math.random(1, 100) <= Cfg.Miss
+            return
+        end
+        Click()
+        HoverT = tick()
+        Delay = GetDelay(pt)
+        ShouldMiss = math.random(1, 100) <= Cfg.Miss
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════════
+--                              UI
+-- ═══════════════════════════════════════════════════════════════════════════
+
+UI = RallyUI:CreateWindow({Name = "Rally"})
+
+T1 = UI:CreateTab("Trigger")
+
+UI:CreateToggle(T1, {Name = "Enabled", Flag = "On", CurrentValue = false, Callback = function(v) Cfg.On = v end})
+UI:CreateToggle(T1, {Name = "Rage Mode", Flag = "Rage", CurrentValue = false, Callback = function(v) Cfg.Rage = v end})
+UI:CreateSlider(T1, {Name = "Torso Min", Flag = "TorsoMin", Range = {0, 100}, CurrentValue = 30, Increment = 5, Suffix = "ms", Callback = function(v) Cfg.TorsoMin = v end})
+UI:CreateSlider(T1, {Name = "Torso Max", Flag = "TorsoMax", Range = {0, 150}, CurrentValue = 50, Increment = 5, Suffix = "ms", Callback = function(v) Cfg.TorsoMax = v end})
+UI:CreateSlider(T1, {Name = "Head Min", Flag = "HeadMin", Range = {0, 100}, CurrentValue = 35, Increment = 5, Suffix = "ms", Callback = function(v) Cfg.HeadMin = v end})
+UI:CreateSlider(T1, {Name = "Head Max", Flag = "HeadMax", Range = {0, 150}, CurrentValue = 60, Increment = 5, Suffix = "ms", Callback = function(v) Cfg.HeadMax = v end})
+UI:CreateSlider(T1, {Name = "Miss %", Flag = "Miss", Range = {0, 10}, CurrentValue = 3, Increment = 1, Suffix = "%", Callback = function(v) Cfg.Miss = v end})
+UI:CreateToggle(T1, {Name = "KO Check", Flag = "KO", CurrentValue = true, Callback = function(v) Cfg.KO = v end})
+UI:CreateToggle(T1, {Name = "FF Check", Flag = "FF", CurrentValue = true, Callback = function(v) Cfg.FF = v end})
+
+T2 = UI:CreateTab("HvH")
+
+UI:CreateToggle(T2, {Name = "Enabled", Flag = "AutoHvH", CurrentValue = false, Callback = function(v) Cfg.AutoHvH = v end})
+UI:CreateToggle(T2, {Name = "Auto Shoot", Flag = "AutoShoot", CurrentValue = true, Callback = function(v) Cfg.AutoShoot = v end})
+UI:CreateToggle(T2, {Name = "Vis Check", Flag = "VisCheck", CurrentValue = true, Callback = function(v) Cfg.VisCheck = v end})
+UI:CreateToggle(T2, {Name = "Wallbang", Flag = "WallBang", CurrentValue = false, Callback = function(v) Cfg.WallBang = v end})
+UI:CreateSlider(T2, {Name = "Smooth", Flag = "HvHSmooth", Range = {0, 0.9}, CurrentValue = 0.3, Increment = 0.05, Callback = function(v) Cfg.HvHSmooth = v end})
+UI:CreateSlider(T2, {Name = "Prediction", Flag = "HvHPred", Range = {0, 0.3}, CurrentValue = 0.12, Increment = 0.01, Callback = function(v) Cfg.HvHPred = v end})
+UI:CreateSlider(T2, {Name = "FOV", Flag = "HvHFOV", Range = {50, 360}, CurrentValue = 360, Increment = 10, Callback = function(v) Cfg.HvHFOV = v end})
+UI:CreateSlider(T2, {Name = "Shoot Delay", Flag = "ShootDelay", Range = {0, 200}, CurrentValue = 50, Increment = 10, Suffix = "ms", Callback = function(v) Cfg.ShootDelay = v end})
+UI:CreateSlider(T2, {Name = "Scope Time", Flag = "ScopeTime", Range = {0.1, 1}, CurrentValue = 0.5, Increment = 0.05, Suffix = "s", Callback = function(v) Cfg.ScopeTime = v end})
+
+PriorityBtn = nil
+UI:CreateButton(T2, {
+    Name = "Priority: Closest",
+    Callback = function()
+        Cfg.HvHPriority = Cfg.HvHPriority == "Closest" and "Visible" or "Closest"
+        if PriorityBtn then PriorityBtn.Text = "Priority: " .. Cfg.HvHPriority end
+    end
+})
+task.spawn(function() task.wait(0.1) PriorityBtn = T2.Frame:FindFirstChild("Priority: Closest") end)
+
+T3 = UI:CreateTab("Lock")
+
+UI:CreateToggle(T3, {Name = "Camlock", Flag = "Lock", CurrentValue = false, Callback = function(v) Cfg.Lock = v if not v then LockOn = false LockTgt = nil end end})
+UI:CreateSlider(T3, {Name = "Smooth", Flag = "Smooth", Range = {0, 0.9}, CurrentValue = 0.5, Increment = 0.1, Callback = function(v) Cfg.Smooth = v end})
+UI:CreateSlider(T3, {Name = "Prediction", Flag = "Pred", Range = {0, 0.3}, CurrentValue = 0.135, Increment = 0.005, Callback = function(v) Cfg.Pred = v end})
+UI:CreateToggle(T3, {Name = "Dist Check", Flag = "DistanceCheck", CurrentValue = false, Callback = function(v) Cfg.DistanceCheck = v end})
+UI:CreateSlider(T3, {Name = "Max Dist", Flag = "MaxDistance", Range = {50, 500}, CurrentValue = 200, Increment = 10, Suffix = " st", Callback = function(v) Cfg.MaxDistance = v end})
+
+KeyBtn = nil
+WaitKey = false
+UI:CreateButton(T3, {Name = "Key: [E]", Callback = function() WaitKey = true if KeyBtn then KeyBtn.Text = "Press key..." end end})
+task.spawn(function() task.wait(0.1) KeyBtn = T3.Frame:FindFirstChild("Key: [E]") end)
+
+UIS.InputBegan:Connect(function(i, gp)
+    if WaitKey and i.UserInputType == Enum.UserInputType.Keyboard then
+        Cfg.LockKey = i.KeyCode
+        if KeyBtn then KeyBtn.Text = "Key: [" .. (Keys[i.KeyCode] or i.KeyCode.Name) .. "]" end
+        WaitKey = false
+    end
+end)
+
+T4 = UI:CreateTab("Spin")
+
+UI:CreateToggle(T4, {Name = "Enabled", Flag = "Spin", CurrentValue = false, Callback = function(v) Cfg.Spin = v end})
+UI:CreateSlider(T4, {Name = "Speed", Flag = "SpinSpeed", Range = {500, 5000}, CurrentValue = 2000, Increment = 100, Callback = function(v) Cfg.SpinSpeed = v end})
+UI:CreateSlider(T4, {Name = "Cam Dist", Flag = "CamDistance", Range = {5, 30}, CurrentValue = 10, Increment = 1, Callback = function(v) Cfg.CamDistance = v end})
+UI:CreateSlider(T4, {Name = "Cam Height", Flag = "CamHeight", Range = {0, 10}, CurrentValue = 3, Increment = 0.5, Callback = function(v) Cfg.CamHeight = v end})
+UI:CreateSlider(T4, {Name = "Sensitivity", Flag = "CamSensitivity", Range = {0.1, 1}, CurrentValue = 0.3, Increment = 0.05, Callback = function(v) Cfg.CamSensitivity = v end})
+
+T5 = UI:CreateTab("Speed")
+
+UI:CreateToggle(T5, {Name = "Enabled", Flag = "SpeedOn", CurrentValue = false, Callback = function(v) Cfg.Speed = v if v then ApplySpeed() end end})
+UI:CreateSlider(T5, {Name = "Speed", Flag = "SpeedValue", Range = {4, 100}, CurrentValue = 16, Increment = 2, Callback = function(v) Cfg.SpeedValue = v ApplySpeed() end})
+UI:CreateSlider(T5, {Name = "Increment", Flag = "SpeedIncrement", Range = {1, 10}, CurrentValue = 4, Increment = 1, Callback = function(v) Cfg.SpeedIncrement = v end})
+UI:CreateToggle(T5, {Name = "Anti-Slow", Flag = "AntiSlow", CurrentValue = true, Callback = function(v) Cfg.AntiSlow = v end})
+
+T6 = UI:CreateTab("Cfg")
+UI:CreateConfigSection(T6)
+UI:CreateButton(T6, {Name = "Destroy", Callback = function()
+    Cfg.On = false
+    Cfg.Lock = false
+    Cfg.Spin = false
+    Cfg.Speed = false
+    Cfg.AutoHvH = false
+    LockOn = false
+    if IsQuickScoping then RightClick(false) end
+    IsQuickScoping = false
+    UI:Destroy()
+end})
